@@ -28,6 +28,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   serverExternalPackages: ["@supabase/supabase-js", "@supabase/ssr"],
   poweredByHeader: false,
   experimental: {
