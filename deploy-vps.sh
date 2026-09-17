@@ -37,22 +37,16 @@ if [ -z "$SUPABASE_DOMAIN" ]; then
   read -p "Domínio Supabase: " SUPABASE_DOMAIN
 fi
 
-if [ -z "$SSL_EMAIL" ]; then
-  echo -e "${YELLOW}>> Informe seu e-mail (para emissão e renovação dos certificados SSL Let's Encrypt):${NC}"
-  read -p "E-mail: " SSL_EMAIL
-fi
-
 echo ""
 echo -e "${BLUE}Configurações informadas:${NC}"
 echo "  - Domínio App:      https://$APP_DOMAIN"
 echo "  - Domínio Supabase: https://$SUPABASE_DOMAIN"
-echo "  - E-mail SSL:       $SSL_EMAIL"
 echo ""
 
 # 3. Instalar Dependências do Sistema
-echo -e "${CYAN}[1/6] Atualizando sistema e instalando pacotes (Docker, Nginx, Certbot, Node.js)...${NC}"
+echo -e "${CYAN}[1/4] Atualizando sistema e instalando dependências (Docker, Node.js)...${NC}"
 apt-get update -qq
-apt-get install -y -qq curl git openssl jq nginx certbot python3-certbot-nginx ca-certificates gnupg lsb-release
+apt-get install -y -qq curl git openssl jq ca-certificates gnupg lsb-release
 
 # Instalar Node.js 20 se não existir
 if ! command -v node &> /dev/null; then
@@ -69,7 +63,7 @@ fi
 
 # 4. Instalar Supabase Self-Hosted
 SUPABASE_DIR="/opt/supabase"
-echo -e "${CYAN}[2/6] Configurando Supabase Self-Hosted em $SUPABASE_DIR...${NC}"
+echo -e "${CYAN}[2/4] Configurando Supabase Self-Hosted em $SUPABASE_DIR...${NC}"
 mkdir -p "$SUPABASE_DIR"
 
 if [ ! -f "$SUPABASE_DIR/docker-compose.yml" ]; then
@@ -146,7 +140,7 @@ for i in {1..30}; do
 done
 
 # 5. Executar as Migrations do Projeto
-echo -e "${CYAN}[3/6] Aplicando migrations do banco de dados...${NC}"
+echo -e "${CYAN}[3/4] Aplicando migrations do banco de dados...${NC}"
 if [ -d "$PROJECT_DIR/supabase/migrations" ]; then
   for sql_file in $(ls -1 "$PROJECT_DIR"/supabase/migrations/*.sql 2>/dev/null | sort); do
     echo "  -> Executando $(basename "$sql_file")..."
@@ -156,7 +150,7 @@ if [ -d "$PROJECT_DIR/supabase/migrations" ]; then
 fi
 
 # 6. Configurar e Subir o Container do App Next.js
-echo -e "${CYAN}[4/6] Construindo e iniciando a aplicação Next.js...${NC}"
+echo -e "${CYAN}[4/4] Construindo e iniciando a aplicação Next.js...${NC}"
 cd "$PROJECT_DIR"
 
 cat <<EOF > .env.local
@@ -169,13 +163,40 @@ EOF
 docker compose down 2>/dev/null || true
 docker compose up -d --build
 
-# 7. Configurar Nginx (Proxy Reverso para Next.js e Supabase)
-echo -e "${CYAN}[5/6] Configurando Nginx e Proxy Reverso...${NC}"
+# 7. Salvar credenciais geradas e instruções
+CREDS_FILE="/root/quiz_credentials.txt"
+cat <<EOF > "$CREDS_FILE"
+============================================================
+              CREDENCIAS DO SEU PROJETO QUIZ
+============================================================
 
-# Virtual Host do App
-cat <<EOF > /etc/nginx/sites-available/quiz-app
+1. APLICATIVO NEXT.JS (Porta interna 3000):
+   - Domínio: https://$APP_DOMAIN
+   - Local:   http://127.0.0.1:3000
+
+2. SUPABASE SELF-HOSTED (Porta interna 8000):
+   - Domínio da API / Gateway: https://$SUPABASE_DOMAIN
+   - Painel Supabase Studio:    https://$SUPABASE_DOMAIN/project/default
+   - Usuário do Studio: $DASHBOARD_USERNAME
+   - Senha do Studio:   $DASHBOARD_PASSWORD
+
+3. CHAVES DE API DO SUPABASE:
+   - Anon / Public Key:
+$ANON_KEY
+
+   - Service Role Key (Secreta):
+$SERVICE_ROLE_KEY
+
+4. BANCO DE DADOS POSTGRESQL (Porta interna 5432):
+   - Usuário: postgres
+   - Senha:   $POSTGRES_PASSWORD
+
+============================================================
+CONFIGURAÇÃO DO SEU NGINX (COPIAR E COLAR):
+============================================================
+
+# Bloco para o Aplicativo Next.js:
 server {
-    listen 80;
     server_name $APP_DOMAIN;
 
     location / {
@@ -192,12 +213,9 @@ server {
 
     client_max_body_size 10M;
 }
-EOF
 
-# Virtual Host do Supabase (Kong Gateway & Studio)
-cat <<EOF > /etc/nginx/sites-available/quiz-supabase
+# Bloco para o Supabase (API, Auth, Storage e Studio):
 server {
-    listen 80;
     server_name $SUPABASE_DOMAIN;
 
     location / {
@@ -214,56 +232,15 @@ server {
 
     client_max_body_size 50M;
 }
-EOF
-
-ln -sf /etc/nginx/sites-available/quiz-app /etc/nginx/sites-enabled/
-ln -sf /etc/nginx/sites-available/quiz-supabase /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-
-nginx -t
-systemctl reload nginx
-
-# 8. Emitir Certificados SSL com Certbot
-echo -e "${CYAN}[6/6] Emitindo certificados SSL gratuitos (Let's Encrypt)...${NC}"
-certbot --nginx --non-interactive --agree-tos -m "$SSL_EMAIL" -d "$APP_DOMAIN" -d "$SUPABASE_DOMAIN" --redirect || {
-  echo -e "${YELLOW}[AVISO] Falha ao emitir SSL automaticamente. Verifique se o DNS de $APP_DOMAIN e $SUPABASE_DOMAIN já aponta para o IP desta VPS. Você pode reexecutar 'certbot --nginx' quando o DNS propagar.${NC}"
-}
-
-# 10. Salvar credenciais geradas
-CREDS_FILE="/root/quiz_credentials.txt"
-cat <<EOF > "$CREDS_FILE"
-============================================================
-              CREDENCIAS DO SEU PROJETO QUIZ
-============================================================
-
-1. APLICATIVO NEXT.JS:
-   - URL: https://$APP_DOMAIN
-
-2. SUPABASE SELF-HOSTED:
-   - URL da API / Gateway: https://$SUPABASE_DOMAIN
-   - Painel Supabase Studio: https://$SUPABASE_DOMAIN/project/default
-   - Usuário do Studio: $DASHBOARD_USERNAME
-   - Senha do Studio:   $DASHBOARD_PASSWORD
-
-3. CHAVES DE API DO SUPABASE:
-   - Anon / Public Key:
-$ANON_KEY
-
-   - Service Role Key (Secreta):
-$SERVICE_ROLE_KEY
-
-4. BANCO DE DADOS POSTGRESQL (Interno):
-   - Usuário: postgres
-   - Senha:   $POSTGRES_PASSWORD
-   - Porta:   5432
 
 ============================================================
 PRÓXIMOS PASSOS:
-1. Acesse https://$APP_DOMAIN/register e crie sua conta.
-2. Na VPS, execute para se tornar administrador:
+1. Configure os blocos acima no seu Nginx e gere o SSL (certbot).
+2. Acesse https://$APP_DOMAIN/register e crie sua conta.
+3. Na VPS, execute para se tornar administrador:
    cd $PROJECT_DIR
    npm run setup:promote-admin -- --email=SEU_EMAIL_CADASTRADO
-3. Acesse o painel administrativo em:
+4. Acesse o painel administrativo em:
    https://$APP_DOMAIN/admin
 ============================================================
 EOF
