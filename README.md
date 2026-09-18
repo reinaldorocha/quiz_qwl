@@ -105,6 +105,61 @@ Site URL e Redirect URLs ficam no **painel Supabase**, não no código.
 - SMTP / templates são necessários sobretudo para **reset de senha**; sem isso, forgot-password falha em produção.
 - `/auth/callback` permanece necessário mesmo com confirmação desligada.
 
+## 🚀 Como Atualizar a Aplicação na VPS (Deploy Contínuo)
+
+Sempre que você fizer alterações no código, criar novos recursos ou adicionar migrations de banco, siga os passos abaixo para atualizar sua VPS:
+
+### Opção 1: Atualização Automática em 1 Comando (Recomendado)
+
+Criamos um script que puxa o código do Git, aplica novas migrations no Supabase se houver e recompila o container do Next.js automaticamente:
+
+```bash
+cd /var/www/quiz_qwl
+./update-app.sh
+```
+
+---
+
+### Opção 2: Atualização Manual Passo a Passo
+
+Caso prefira rodar os comandos individualmente:
+
+```bash
+cd /var/www/quiz_qwl
+
+# 1. Puxe as últimas alterações do GitHub
+git pull origin main
+
+# 2. Recompile e reinicie o container do Next.js
+docker compose build
+docker compose up -d
+
+# 3. (Opcional) Se houver novas migrations no banco (supabase/migrations/):
+docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/NOME_DA_NOVA_MIGRATION.sql
+```
+
+---
+
+### Comandos Úteis de Manutenção
+
+* **Verificar o status de todos os serviços e portas**:
+  ```bash
+  ./check-status.sh
+  ```
+* **Ver logs em tempo real do Next.js**:
+  ```bash
+  docker logs quiz-app -f
+  ```
+* **Ver logs dos serviços do Supabase**:
+  ```bash
+  docker logs supabase-auth -f
+  docker logs supabase-rest -f
+  ```
+* **Reiniciar a aplicação**:
+  ```bash
+  docker compose restart
+  ```
+
 ## Licença
 
 Defina a licença comercial adequada antes de distribuir o código.
