@@ -7,13 +7,14 @@ services:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
         SKIP_ENV_VALIDATION: ${SKIP_ENV_VALIDATION:-false}
     container_name: quiz-app
     restart: unless-stopped
     ports:
       - "127.0.0.1:3010:3000"
     env_file:
-      - .env.local
+      - .env
     environment:
       - NODE_ENV=production
       - PORT=3000

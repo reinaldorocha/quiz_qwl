@@ -175,15 +175,27 @@ fi
 echo -e "${CYAN}[4/4] Construindo e iniciando a aplicação Next.js...${NC}"
 cd "$PROJECT_DIR"
 
-cat <<EOF > .env.local
+export NEXT_PUBLIC_SUPABASE_URL="https://$SUPABASE_DOMAIN"
+export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
+export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+export NEXT_PUBLIC_APP_URL="https://$APP_DOMAIN"
+
+cat <<EOF > .env
 NEXT_PUBLIC_SUPABASE_URL=https://$SUPABASE_DOMAIN
 NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
 NEXT_PUBLIC_APP_URL=https://$APP_DOMAIN
 EOF
+cp -f .env .env.local
 
 docker compose down 2>/dev/null || true
-docker compose up -d --build
+docker compose build \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL="https://$SUPABASE_DOMAIN" \
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
+  --build-arg NEXT_PUBLIC_APP_URL="https://$APP_DOMAIN" \
+  --build-arg SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+
+docker compose up -d
 
 # 7. Salvar credenciais geradas e instruções
 CREDS_FILE="/root/quiz_credentials.txt"
