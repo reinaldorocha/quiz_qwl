@@ -84,33 +84,48 @@ fi
 
 cd "$SUPABASE_DIR"
 
-# Gerar senhas e segredos criptográficos seguros
-POSTGRES_PASSWORD=$(openssl rand -hex 16)
-JWT_SECRET=$(openssl rand -hex 32)
-SECRET_KEY_BASE=$(openssl rand -hex 32)
-VAULT_ENC_KEY=$(openssl rand -hex 16)
-DASHBOARD_USERNAME="admin"
-DASHBOARD_PASSWORD=$(openssl rand -base64 12)
+# Carregar senhas existentes se já existirem, para não dessincronizar com o banco
+if [ -f .env ]; then
+  echo "Carregando credenciais já existentes do Supabase..."
+  POSTGRES_PASSWORD=$(grep "^POSTGRES_PASSWORD=" .env | cut -d'=' -f2 || true)
+  JWT_SECRET=$(grep "^JWT_SECRET=" .env | cut -d'=' -f2 || true)
+  SECRET_KEY_BASE=$(grep "^SECRET_KEY_BASE=" .env | cut -d'=' -f2 || true)
+  VAULT_ENC_KEY=$(grep "^VAULT_ENC_KEY=" .env | cut -d'=' -f2 || true)
+  DASHBOARD_USERNAME=$(grep "^DASHBOARD_USERNAME=" .env | cut -d'=' -f2 || true)
+  DASHBOARD_PASSWORD=$(grep "^DASHBOARD_PASSWORD=" .env | cut -d'=' -f2 || true)
+  ANON_KEY=$(grep "^ANON_KEY=" .env | cut -d'=' -f2 || true)
+  SERVICE_ROLE_KEY=$(grep "^SERVICE_ROLE_KEY=" .env | cut -d'=' -f2 || true)
+fi
 
-# Gerar chaves JWT assinadas (anon e service_role) usando Node.js
-KEYS_JSON=$(node -e '
-const crypto = require("crypto");
-const secret = process.argv[1];
-const sign = (payload) => {
-  const h = Buffer.from(JSON.stringify({alg:"HS256",typ:"JWT"})).toString("base64url");
-  const b = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const s = crypto.createHmac("sha256", secret).update(h + "." + b).digest("base64url");
-  return `${h}.${b}.${s}`;
-};
-const now = Math.floor(Date.now() / 1000);
-const exp = now + 15 * 365 * 24 * 3600; // 15 anos
-const anon = sign({ role: "anon", iss: "supabase", iat: now, exp });
-const service = sign({ role: "service_role", iss: "supabase", iat: now, exp });
-console.log(JSON.stringify({ anon, service }));
-' "$JWT_SECRET")
+# Gerar valores caso ainda não existam
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}
+JWT_SECRET=${JWT_SECRET:-$(openssl rand -hex 32)}
+SECRET_KEY_BASE=${SECRET_KEY_BASE:-$(openssl rand -hex 32)}
+VAULT_ENC_KEY=${VAULT_ENC_KEY:-$(openssl rand -hex 16)}
+DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-admin}
+DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-$(openssl rand -base64 12)}
 
-ANON_KEY=$(echo "$KEYS_JSON" | jq -r .anon)
-SERVICE_ROLE_KEY=$(echo "$KEYS_JSON" | jq -r .service)
+# Gerar chaves JWT se necessário
+if [ -z "$ANON_KEY" ] || [ -z "$SERVICE_ROLE_KEY" ]; then
+  KEYS_JSON=$(node -e '
+  const crypto = require("crypto");
+  const secret = process.argv[1];
+  const sign = (payload) => {
+    const h = Buffer.from(JSON.stringify({alg:"HS256",typ:"JWT"})).toString("base64url");
+    const b = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const s = crypto.createHmac("sha256", secret).update(h + "." + b).digest("base64url");
+    return `${h}.${b}.${s}`;
+  };
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + 15 * 365 * 24 * 3600; // 15 anos
+  const anon = sign({ role: "anon", iss: "supabase", iat: now, exp });
+  const service = sign({ role: "service_role", iss: "supabase", iat: now, exp });
+  console.log(JSON.stringify({ anon, service }));
+  ' "$JWT_SECRET")
+
+  ANON_KEY=$(echo "$KEYS_JSON" | jq -r .anon)
+  SERVICE_ROLE_KEY=$(echo "$KEYS_JSON" | jq -r .service)
+fi
 
 set_env() {
   local key="$1"
@@ -124,7 +139,7 @@ set_env() {
 }
 
 # Criar ou atualizar o .env do Supabase
-cp .env.example .env
+[ ! -f .env ] && cp .env.example .env
 
 set_env "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
 set_env "JWT_SECRET" "$JWT_SECRET"
@@ -160,6 +175,17 @@ for i in {1..30}; do
   fi
   sleep 2
 done
+
+# Sincronizar senhas de todos os usuários internos com a senha atual do .env
+docker exec -i supabase-db psql -U postgres -d postgres <<EOF 2>/dev/null || true
+ALTER USER postgres WITH PASSWORD '$POSTGRES_PASSWORD';
+ALTER USER supabase_admin WITH PASSWORD '$POSTGRES_PASSWORD';
+ALTER USER supabase_auth_admin WITH PASSWORD '$POSTGRES_PASSWORD';
+ALTER USER authenticator WITH PASSWORD '$POSTGRES_PASSWORD';
+ALTER USER supabase_storage_admin WITH PASSWORD '$POSTGRES_PASSWORD';
+EOF
+
+docker compose restart auth rest storage 2>/dev/null || true
 
 # 5. Executar as Migrations do Projeto
 echo -e "${CYAN}[3/4] Aplicando migrations do banco de dados...${NC}"
