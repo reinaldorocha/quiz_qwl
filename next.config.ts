@@ -29,7 +29,12 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  serverExternalPackages: ["@supabase/supabase-js", "@supabase/ssr"],
+  serverExternalPackages: [
+    "@supabase/supabase-js",
+    "@supabase/ssr",
+    "isomorphic-dompurify",
+    "jsdom",
+  ],
   poweredByHeader: false,
   experimental: {
     serverActions: {
