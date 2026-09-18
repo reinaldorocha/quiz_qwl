@@ -3,6 +3,8 @@
 # Script de Instalação Automática: Next.js App + Supabase Self-Hosted na VPS
 # ==============================================================================
 set -e
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
 # Cores para saída
 RED='\033[0;31m'
@@ -66,12 +68,18 @@ SUPABASE_DIR="/opt/supabase"
 echo -e "${CYAN}[2/4] Configurando Supabase Self-Hosted em $SUPABASE_DIR...${NC}"
 mkdir -p "$SUPABASE_DIR"
 
-if [ ! -f "$SUPABASE_DIR/docker-compose.yml" ]; then
+if [ ! -f "$SUPABASE_DIR/.env.example" ] || [ ! -f "$SUPABASE_DIR/docker-compose.yml" ]; then
   echo "Baixando arquivos oficiais do Supabase Docker..."
   TEMP_REPO="/tmp/supabase-repo-$$"
   git clone --depth 1 https://github.com/supabase/supabase.git "$TEMP_REPO"
-  cp -rf "$TEMP_REPO"/docker/* "$SUPABASE_DIR"/
+  cp -rf "$TEMP_REPO"/docker/. "$SUPABASE_DIR"/
   rm -rf "$TEMP_REPO"
+fi
+
+# Fallback se .env.example não tiver sido copiado
+if [ ! -f "$SUPABASE_DIR/.env.example" ]; then
+  echo "Baixando .env.example diretamente..."
+  curl -fsSL https://raw.githubusercontent.com/supabase/supabase/master/docker/.env.example -o "$SUPABASE_DIR/.env.example"
 fi
 
 cd "$SUPABASE_DIR"
