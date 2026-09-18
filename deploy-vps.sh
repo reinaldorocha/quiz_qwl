@@ -120,6 +120,11 @@ sed -i "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$SUPABASE_DOMAIN|g" .env
 sed -i "s|^SITE_URL=.*|SITE_URL=https://$APP_DOMAIN|g" .env
 sed -i "s|^ADDITIONAL_REDIRECT_URLS=.*|ADDITIONAL_REDIRECT_URLS=https://$APP_DOMAIN/auth/callback,https://$APP_DOMAIN|g" .env
 
+# Portas customizadas para evitar conflito com Coolify e outros containers
+sed -i "s|^KONG_HTTP_PORT=.*|KONG_HTTP_PORT=8800|g" .env 2>/dev/null || echo "KONG_HTTP_PORT=8800" >> .env
+sed -i "s|^KONG_HTTPS_PORT=.*|KONG_HTTPS_PORT=8444|g" .env 2>/dev/null || echo "KONG_HTTPS_PORT=8444" >> .env
+sed -i "s|^POSTGRES_PORT=.*|POSTGRES_PORT=54322|g" .env 2>/dev/null || echo "POSTGRES_PORT=54322" >> .env
+
 # Habilitar confirmação automática de cadastro conforme SETUP.md
 if grep -q "ENABLE_EMAIL_AUTOCONFIRM" .env; then
   sed -i "s|^ENABLE_EMAIL_AUTOCONFIRM=.*|ENABLE_EMAIL_AUTOCONFIRM=true|g" .env
@@ -170,11 +175,11 @@ cat <<EOF > "$CREDS_FILE"
               CREDENCIAS DO SEU PROJETO QUIZ
 ============================================================
 
-1. APLICATIVO NEXT.JS (Porta interna 3000):
+1. APLICATIVO NEXT.JS (Porta interna 3010):
    - Domínio: https://$APP_DOMAIN
-   - Local:   http://127.0.0.1:3000
+   - Local:   http://127.0.0.1:3010
 
-2. SUPABASE SELF-HOSTED (Porta interna 8000):
+2. SUPABASE SELF-HOSTED (Porta interna 8800):
    - Domínio da API / Gateway: https://$SUPABASE_DOMAIN
    - Painel Supabase Studio:    https://$SUPABASE_DOMAIN/project/default
    - Usuário do Studio: $DASHBOARD_USERNAME
@@ -187,20 +192,38 @@ $ANON_KEY
    - Service Role Key (Secreta):
 $SERVICE_ROLE_KEY
 
-4. BANCO DE DADOS POSTGRESQL (Porta interna 5432):
+4. BANCO DE DADOS POSTGRESQL (Porta interna 54322):
    - Usuário: postgres
    - Senha:   $POSTGRES_PASSWORD
 
 ============================================================
-CONFIGURAÇÃO DO SEU NGINX (COPIAR E COLAR):
+CONFIGURAÇÃO NO SEU NGINX PROXY MANAGER (NPM):
+============================================================
+Como você usa o Nginx Proxy Manager, basta criar 2 Proxy Hosts no painel:
+
+Host 1 (App):
+  - Domain Names:           $APP_DOMAIN
+  - Forward Hostname / IP:  172.17.0.1  (ou o IP da VPS)
+  - Forward Port:           3010
+  - WebSockets Support:     [X] Ativado
+  - SSL:                    Request a new SSL Certificate (Let's Encrypt)
+
+Host 2 (Supabase):
+  - Domain Names:           $SUPABASE_DOMAIN
+  - Forward Hostname / IP:  172.17.0.1  (ou o IP da VPS)
+  - Forward Port:           8800
+  - WebSockets Support:     [X] Ativado (essencial para Realtime)
+  - SSL:                    Request a new SSL Certificate (Let's Encrypt)
+
+============================================================
+OU SE PREFERIR O ARQUIVO NGINX TRADICIONAL:
 ============================================================
 
 # Bloco para o Aplicativo Next.js:
 server {
     server_name $APP_DOMAIN;
-
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3010;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -210,16 +233,14 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
-
     client_max_body_size 10M;
 }
 
-# Bloco para o Supabase (API, Auth, Storage e Studio):
+# Bloco para o Supabase:
 server {
     server_name $SUPABASE_DOMAIN;
-
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:8800;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -229,7 +250,6 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
-
     client_max_body_size 50M;
 }
 
