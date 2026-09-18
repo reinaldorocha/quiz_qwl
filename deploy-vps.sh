@@ -112,33 +112,42 @@ console.log(JSON.stringify({ anon, service }));
 ANON_KEY=$(echo "$KEYS_JSON" | jq -r .anon)
 SERVICE_ROLE_KEY=$(echo "$KEYS_JSON" | jq -r .service)
 
+set_env() {
+  local key="$1"
+  local val="$2"
+  local file="${3:-.env}"
+  if grep -q "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${val}|g" "$file"
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+}
+
 # Criar ou atualizar o .env do Supabase
 cp .env.example .env
 
-sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$POSTGRES_PASSWORD|g" .env
-sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$JWT_SECRET|g" .env
-sed -i "s|^ANON_KEY=.*|ANON_KEY=$ANON_KEY|g" .env
-sed -i "s|^SERVICE_ROLE_KEY=.*|SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY|g" .env
-sed -i "s|^DASHBOARD_USERNAME=.*|DASHBOARD_USERNAME=$DASHBOARD_USERNAME|g" .env
-sed -i "s|^DASHBOARD_PASSWORD=.*|DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD|g" .env
-sed -i "s|^SECRET_KEY_BASE=.*|SECRET_KEY_BASE=$SECRET_KEY_BASE|g" .env
-sed -i "s|^VAULT_ENC_KEY=.*|VAULT_ENC_KEY=$VAULT_ENC_KEY|g" .env
+set_env "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
+set_env "JWT_SECRET" "$JWT_SECRET"
+set_env "ANON_KEY" "$ANON_KEY"
+set_env "SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY"
+set_env "DASHBOARD_USERNAME" "$DASHBOARD_USERNAME"
+set_env "DASHBOARD_PASSWORD" "$DASHBOARD_PASSWORD"
+set_env "SECRET_KEY_BASE" "$SECRET_KEY_BASE"
+set_env "VAULT_ENC_KEY" "$VAULT_ENC_KEY"
 
-sed -i "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://$SUPABASE_DOMAIN|g" .env
-sed -i "s|^SITE_URL=.*|SITE_URL=https://$APP_DOMAIN|g" .env
-sed -i "s|^ADDITIONAL_REDIRECT_URLS=.*|ADDITIONAL_REDIRECT_URLS=https://$APP_DOMAIN/auth/callback,https://$APP_DOMAIN|g" .env
+set_env "API_EXTERNAL_URL" "https://$SUPABASE_DOMAIN"
+set_env "SITE_URL" "https://$APP_DOMAIN"
+set_env "ADDITIONAL_REDIRECT_URLS" "https://$APP_DOMAIN/auth/callback,https://$APP_DOMAIN"
+set_env "ENABLE_EMAIL_AUTOCONFIRM" "true"
 
 # Portas customizadas para evitar conflito com Coolify e outros containers
-sed -i "s|^KONG_HTTP_PORT=.*|KONG_HTTP_PORT=8800|g" .env 2>/dev/null || echo "KONG_HTTP_PORT=8800" >> .env
-sed -i "s|^KONG_HTTPS_PORT=.*|KONG_HTTPS_PORT=8444|g" .env 2>/dev/null || echo "KONG_HTTPS_PORT=8444" >> .env
-sed -i "s|^POSTGRES_PORT=.*|POSTGRES_PORT=54322|g" .env 2>/dev/null || echo "POSTGRES_PORT=54322" >> .env
+set_env "API_GW_HTTP_PORT" "8800"
+set_env "KONG_HTTP_PORT" "8800"
+set_env "KONG_HTTPS_PORT" "8444"
+set_env "POSTGRES_PORT" "54322"
 
-# Habilitar confirmação automática de cadastro conforme SETUP.md
-if grep -q "ENABLE_EMAIL_AUTOCONFIRM" .env; then
-  sed -i "s|^ENABLE_EMAIL_AUTOCONFIRM=.*|ENABLE_EMAIL_AUTOCONFIRM=true|g" .env
-else
-  echo "ENABLE_EMAIL_AUTOCONFIRM=true" >> .env
-fi
+echo "Parando eventuais containers anteriores do Supabase..."
+docker compose down 2>/dev/null || true
 
 echo "Iniciando containers do Supabase..."
 docker compose up -d
