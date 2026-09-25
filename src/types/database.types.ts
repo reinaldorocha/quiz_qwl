@@ -10,7 +10,11 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5";
   };
-  public: {
+  public: DatabaseSchema;
+  quiz: DatabaseSchema;
+};
+
+export type DatabaseSchema = {
     Tables: {
       profiles: {
         Row: {
@@ -817,4 +821,4 @@ export type Database = {
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };
-};
+

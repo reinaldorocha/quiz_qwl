@@ -2,6 +2,7 @@ import "server-only";
 
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database.types";
+import { DB_SCHEMA } from "./client";
 
 /**
  * Cliente Supabase com service role — APENAS server-side.
@@ -17,10 +18,13 @@ export function createAdminClient() {
     );
   }
 
-  return createClient<Database>(url, serviceRoleKey, {
+  return createClient<Database, "quiz">(url, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+    },
+    db: {
+      schema: DB_SCHEMA,
     },
   });
 }

@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "@/types/database.types";
+import { DB_SCHEMA } from "./client";
 
 export async function createClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -14,7 +15,7 @@ export async function createClient() {
 
   const cookieStore = await cookies();
 
-  return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
+  return createServerClient<Database, "quiz">(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -28,6 +29,9 @@ export async function createClient() {
           // setAll chamado de Server Component — ignorado quando middleware gerencia cookies
         }
       },
+    },
+    db: {
+      schema: DB_SCHEMA,
     },
   });
 }

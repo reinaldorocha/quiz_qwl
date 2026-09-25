@@ -70,8 +70,10 @@ async function main() {
     process.exit(1);
   }
 
+  const dbSchema = (process.env.NEXT_PUBLIC_SUPABASE_SCHEMA || "quiz") as "public";
   const supabase = createClient(url, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
+    db: { schema: dbSchema },
   });
 
   const { data: profile, error: findError } = await supabase

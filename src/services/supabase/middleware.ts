@@ -8,6 +8,7 @@ import {
   SESSION_REQUIRED_ROUTES,
 } from "@/constants/routes";
 import type { Database } from "@/types/database.types";
+import { DB_SCHEMA } from "./client";
 
 function isPublicRoute(pathname: string): boolean {
   if ((PUBLIC_ROUTES as readonly string[]).includes(pathname)) {
@@ -74,7 +75,7 @@ export async function updateSession(request: NextRequest) {
 
   let supabaseResponse = NextResponse.next({ request });
 
-  const supabase = createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
+  const supabase = createServerClient<Database, "quiz">(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll();
@@ -88,6 +89,9 @@ export async function updateSession(request: NextRequest) {
           supabaseResponse.cookies.set(name, value, options),
         );
       },
+    },
+    db: {
+      schema: DB_SCHEMA,
     },
   });
 

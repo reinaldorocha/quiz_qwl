@@ -161,6 +161,18 @@ set_env "KONG_HTTP_PORT" "8800"
 set_env "KONG_HTTPS_PORT" "8444"
 set_env "POSTGRES_PORT" "54322"
 
+# Garantir que os schemas necessarios (public, graphql_public, uaiflow, quiz) estejam expostos no PostgREST
+CURRENT_SCHEMAS=$(grep "^PGRST_DB_SCHEMAS=" "$SUPABASE_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
+if [ -z "$CURRENT_SCHEMAS" ]; then
+  CURRENT_SCHEMAS="public,graphql_public,quiz"
+fi
+for schema_to_add in "uaiflow" "quiz"; do
+  if ! echo "$CURRENT_SCHEMAS" | grep -qw "$schema_to_add"; then
+    CURRENT_SCHEMAS="${CURRENT_SCHEMAS},${schema_to_add}"
+  fi
+done
+set_env "PGRST_DB_SCHEMAS" "$CURRENT_SCHEMAS"
+
 echo "Parando eventuais containers anteriores do Supabase..."
 docker compose down 2>/dev/null || true
 
@@ -211,6 +223,7 @@ NEXT_PUBLIC_SUPABASE_URL=https://$SUPABASE_DOMAIN
 NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
 NEXT_PUBLIC_APP_URL=https://$APP_DOMAIN
+NEXT_PUBLIC_SUPABASE_SCHEMA=quiz
 EOF
 cp -f .env .env.local
 
@@ -219,6 +232,7 @@ docker compose build \
   --build-arg NEXT_PUBLIC_SUPABASE_URL="https://$SUPABASE_DOMAIN" \
   --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY" \
   --build-arg NEXT_PUBLIC_APP_URL="https://$APP_DOMAIN" \
+  --build-arg NEXT_PUBLIC_SUPABASE_SCHEMA="quiz" \
   --build-arg SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
 
 docker compose up -d
