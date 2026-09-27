@@ -1,6 +1,4 @@
 import { createClient } from "@/services/supabase/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/types/database.types";
 import type {
   QuizStep,
   QuizWidget,
@@ -76,8 +74,10 @@ function normalizeWidgets(widgets: QuizWidget[]): QuizWidget[] {
   return normalized;
 }
 
+type QuizSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
 async function bumpPositionsToAvoidUniqueConflicts(
-  supabase: SupabaseClient<Database>,
+  supabase: QuizSupabaseClient,
   table: "quiz_steps" | "quiz_widgets",
   ids: string[],
 ): Promise<void> {
