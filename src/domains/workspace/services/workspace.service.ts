@@ -132,97 +132,73 @@ export async function ensureDefaultWorkspaceForUser(
   fullName?: string | null,
 ): Promise<UserWorkspace[]> {
   try {
-    const admin = createAdminClient();
-
-    // 1. Garantir que o perfil exista
-    await admin.from("profiles").upsert(
+    const supabase = await createClient();
+    const { error: rpcError } = await (supabase.rpc as any)(
+      "create_default_workspace_if_missing",
       {
-        id: userId,
-        email: email || "",
-        full_name: fullName || null,
+        p_user_id: userId,
+        p_email: email || "",
+        p_name: fullName || null,
       },
-      { onConflict: "id" },
     );
 
-    // 2. Verificar se o usuario ja tem workspaces
-    const existing = await listWorkspacesForUser(userId);
-    if (existing.length > 0) {
-      return existing;
-    }
-
-    // 3. Criar workspace padrao
-    const baseName = fullName?.trim() || "Meu workspace";
-    const slug = `workspace-${userId.replace(/-/g, "").slice(0, 8)}`;
-
-    const { data: createdWs, error: wsError } = await admin
-      .from("workspaces")
-      .upsert(
-        {
-          name: baseName,
-          slug,
-          owner_id: userId,
-        },
-        { onConflict: "slug" },
-      )
-      .select()
-      .maybeSingle();
-
-    if (wsError) {
-      console.warn("[ensureDefaultWorkspaceForUser] Workspace upsert:", wsError.message);
-    }
-
-    let workspaceId = createdWs?.id;
-    if (!workspaceId) {
-      const { data: foundWs } = await admin
-        .from("workspaces")
-        .select("id")
-        .eq("slug", slug)
-        .maybeSingle();
-      workspaceId = foundWs?.id;
-    }
-
-    if (workspaceId) {
-      await admin.from("workspace_members").upsert(
-        {
-          workspace_id: workspaceId,
-          user_id: userId,
-          role: "owner",
-        },
-        { onConflict: "workspace_id,user_id" },
+    if (rpcError) {
+      console.warn(
+        "[ensureDefaultWorkspaceForUser] RPC fallback to admin:",
+        rpcError.message,
       );
-
-      // Atribuir plano padrao se configurado em platform_settings
-      const { data: settings } = await admin
-        .from("platform_settings")
-        .select("default_plan_id, trial_days")
-        .eq("id", 1)
-        .maybeSingle();
-
-      if (
-        settings?.default_plan_id &&
-        settings.trial_days &&
-        settings.trial_days > 0
-      ) {
-        const now = new Date();
-        const periodEnd = new Date(
-          now.getTime() + settings.trial_days * 24 * 60 * 60 * 1000,
-        );
-        await admin.from("workspace_subscriptions").upsert(
+      try {
+        const admin = createAdminClient();
+        await admin.from("profiles").upsert(
           {
-            workspace_id: workspaceId,
-            plan_id: settings.default_plan_id,
-            status: "active",
-            current_period_start: now.toISOString(),
-            current_period_end: periodEnd.toISOString(),
+            id: userId,
+            email: email || "",
+            full_name: fullName || null,
           },
-          { onConflict: "workspace_id" },
+          { onConflict: "id" },
+        );
+
+        const baseName = fullName?.trim() || "Meu workspace";
+        const slug = `workspace-${userId.replace(/-/g, "").slice(0, 8)}`;
+
+        const { data: createdWs } = await admin
+          .from("workspaces")
+          .upsert(
+            {
+              name: baseName,
+              slug,
+              owner_id: userId,
+            },
+            { onConflict: "slug" },
+          )
+          .select()
+          .maybeSingle();
+
+        const workspaceId = createdWs?.id;
+        if (workspaceId) {
+          await admin.from("workspace_members").upsert(
+            {
+              workspace_id: workspaceId,
+              user_id: userId,
+              role: "owner",
+            },
+            { onConflict: "workspace_id,user_id" },
+          );
+        }
+      } catch (adminErr) {
+        console.error(
+          "[ensureDefaultWorkspaceForUser] Admin fallback failed:",
+          adminErr,
         );
       }
     }
 
     return await listWorkspacesForUser(userId);
   } catch (err) {
-    console.error("[ensureDefaultWorkspaceForUser] Erro ao provisionar workspace:", err);
+    console.error(
+      "[ensureDefaultWorkspaceForUser] Erro ao provisionar workspace:",
+      err,
+    );
     return [];
   }
 }
