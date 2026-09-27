@@ -105,25 +105,69 @@ Site URL e Redirect URLs ficam no **painel Supabase**, não no código.
 - SMTP / templates são necessários sobretudo para **reset de senha**; sem isso, forgot-password falha em produção.
 - `/auth/callback` permanece necessário mesmo com confirmação desligada.
 
-## 🚀 Como Atualizar a Aplicação na VPS (Deploy Contínuo)
+---
 
-Sempre que você fizer alterações no código, criar novos recursos ou adicionar migrations de banco, siga os passos abaixo para atualizar sua VPS:
+## 🗄️ Arquitetura de Isolamento de Banco (Multi-App / Schemas)
 
-### Opção 1: Atualização Automática em 1 Comando (Recomendado)
+Para permitir que múltiplos projetos (como **Quiz App** e **UaiFlow**) rodem na **mesma VPS** e compartilhem o **mesmo PostgreSQL do Supabase** com máxima economia de memória (sem duplicar containers), este projeto utiliza o schema dedicado `quiz`.
 
-Criamos um script que puxa o código do Git, aplica novas migrations no Supabase se houver e recompila o container do Next.js automaticamente:
+### Como Funciona:
+- **`quiz`**: Contém todas as tabelas da aplicação (`quiz.quizzes`, `quiz.workspaces`, `quiz.profiles`, `quiz.workspace_members`, `quiz.quiz_steps`, etc.).
+- **`uaiflow`**: Contém as tabelas da automação de Instagram do UaiFlow (`uaiflow.profiles`, `uaiflow.workspaces`, `uaiflow.automations`, etc.).
+- **`auth.users`**: Compartilhado com segurança pelo Supabase Auth.
+- **`public`**: Permanece limpo para extensões e funções utilitárias públicas.
 
-```bash
-cd /var/www/quiz_qwl
-./update-app.sh
+### Configuração do PostgREST (`PGRST_DB_SCHEMAS`)
+O PostgREST do Supabase precisa expor os schemas para a API REST. No arquivo `.env` do Supabase (`/opt/supabase/.env`), os schemas ficam definidos assim:
+```env
+PGRST_DB_SCHEMAS="public,storage,graphql_public,uaiflow,quiz"
+```
+O cliente Next.js do Quiz App se comunica automaticamente com o schema `quiz` através da variável de ambiente:
+```env
+NEXT_PUBLIC_SUPABASE_SCHEMA=quiz
 ```
 
 ---
 
+## 🖥️ Como Instalar em VPS Limpa (Deploy Automático)
+
+O script `deploy-vps.sh` é inteligente: se a VPS estiver limpa, ele instala o Docker, Node.js e o Supabase. Se o Supabase já estiver rodando (instalado pelo UaiFlow, por exemplo), ele **detecta a instância existente**, reutiliza as credenciais e adiciona o schema `quiz` automaticamente sem derrubar o outro app.
+
+### Passo a Passo:
+1. Clone o repositório na VPS:
+   ```bash
+   cd /var/www
+   git clone https://github.com/reinaldorocha/quiz_qwl.git
+   cd quiz_qwl
+   ```
+2. Execute o instalador como root:
+   ```bash
+   sudo ./deploy-vps.sh
+   ```
+3. Informe seu domínio para a aplicação (ex: `quiz.meudominio.com`) e o subdomínio para a API Supabase (ex: `api.meudominio.com`).
+4. Ao final, o script exibirá todas as credenciais salvas e as instruções prontas para o **Nginx Proxy Manager** (porta `3010` para o App e `8800` para a API Supabase).
+
+---
+
+## 🚀 Como Atualizar a Aplicação na VPS (Deploy Contínuo)
+
+Sempre que fizer alterações no GitHub, criar novos recursos ou migrations, basta executar:
+
+### Opção 1: Atualização Automática em 1 Comando (Recomendado)
+```bash
+cd /var/www/quiz_qwl
+./update-app.sh
+```
+O script executa tudo automaticamente:
+1. `git pull origin main`
+2. Garante que `quiz` está ativo em `PGRST_DB_SCHEMAS`
+3. Aplica novas migrations no PostgreSQL
+4. Recarrega o cache do PostgREST (`reload schema`)
+5. Recompila o container Next.js e sobe a nova versão
+
+---
+
 ### Opção 2: Atualização Manual Passo a Passo
-
-Caso prefira rodar os comandos individualmente:
-
 ```bash
 cd /var/www/quiz_qwl
 
@@ -131,11 +175,12 @@ cd /var/www/quiz_qwl
 git pull origin main
 
 # 2. Recompile e reinicie o container do Next.js
-docker compose build
+docker compose build --build-arg NEXT_PUBLIC_SUPABASE_SCHEMA=quiz
 docker compose up -d
 
-# 3. (Opcional) Se houver novas migrations no banco (supabase/migrations/):
-docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/NOME_DA_NOVA_MIGRATION.sql
+# 3. Notifique o schema cache caso tenha rodado migrations
+DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'supabase.*db|supabase-postgres|postgres:17' | head -n1)
+docker exec -i "$DB_CONTAINER" psql -U postgres -d postgres -c "SELECT pg_notify('pgrst', 'reload schema');"
 ```
 
 ---
@@ -150,10 +195,9 @@ docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/NO
   ```bash
   docker logs quiz-app -f
   ```
-* **Ver logs dos serviços do Supabase**:
+* **Ver logs do PostgREST**:
   ```bash
-  docker logs supabase-auth -f
-  docker logs supabase-rest -f
+  docker logs $(docker ps --format '{{.Names}}' | grep -E 'supabase.*rest|postgrest' | head -n1) -f
   ```
 * **Reiniciar a aplicação**:
   ```bash

@@ -63,50 +63,80 @@ if ! command -v docker &> /dev/null; then
   systemctl enable --now docker
 fi
 
-# 4. Instalar Supabase Self-Hosted
-SUPABASE_DIR="/opt/supabase"
-echo -e "${CYAN}[2/4] Configurando Supabase Self-Hosted em $SUPABASE_DIR...${NC}"
-mkdir -p "$SUPABASE_DIR"
+# 4. Configurar ou Detectar Supabase Self-Hosted
+echo -e "${CYAN}[2/4] Verificando Supabase Self-Hosted...${NC}"
 
-if [ ! -f "$SUPABASE_DIR/.env.example" ] || [ ! -f "$SUPABASE_DIR/docker-compose.yml" ]; then
-  echo "Baixando arquivos oficiais do Supabase Docker..."
-  TEMP_REPO="/tmp/supabase-repo-$$"
-  git clone --depth 1 https://github.com/supabase/supabase.git "$TEMP_REPO"
-  cp -rf "$TEMP_REPO"/docker/. "$SUPABASE_DIR"/
-  rm -rf "$TEMP_REPO"
-fi
+DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'supabase.*db|supabase-postgres|postgres:17' | head -n1)
+REST_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'supabase.*rest|postgrest' | head -n1)
 
-# Fallback se .env.example não tiver sido copiado
-if [ ! -f "$SUPABASE_DIR/.env.example" ]; then
-  echo "Baixando .env.example diretamente..."
-  curl -fsSL https://raw.githubusercontent.com/supabase/supabase/master/docker/.env.example -o "$SUPABASE_DIR/.env.example"
-fi
+set_env() {
+  local key="$1"
+  local val="$2"
+  local file="${3:-.env}"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|g" "$file"
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+}
 
-cd "$SUPABASE_DIR"
+if [ -n "$DB_CONTAINER" ] && [ -n "$REST_CONTAINER" ]; then
+  echo -e "${GREEN}Supabase já em execução detectado! (${DB_CONTAINER})${NC}"
+  SUPABASE_DIR=$(docker inspect "$REST_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null)
+  if [ -z "$SUPABASE_DIR" ] || [ ! -f "$SUPABASE_DIR/.env" ]; then
+    ENV_FILE=$(grep -rl "PGRST_DB_SCHEMAS" /root /opt /var/www /home 2>/dev/null | head -n1)
+    [ -n "$ENV_FILE" ] && SUPABASE_DIR=$(dirname "$ENV_FILE")
+  fi
+  [ -z "$SUPABASE_DIR" ] && SUPABASE_DIR="/opt/supabase"
 
-# Carregar senhas existentes se já existirem, para não dessincronizar com o banco
-if [ -f .env ]; then
-  echo "Carregando credenciais já existentes do Supabase..."
-  POSTGRES_PASSWORD=$(grep "^POSTGRES_PASSWORD=" .env | cut -d'=' -f2 || true)
-  JWT_SECRET=$(grep "^JWT_SECRET=" .env | cut -d'=' -f2 || true)
-  SECRET_KEY_BASE=$(grep "^SECRET_KEY_BASE=" .env | cut -d'=' -f2 || true)
-  VAULT_ENC_KEY=$(grep "^VAULT_ENC_KEY=" .env | cut -d'=' -f2 || true)
-  DASHBOARD_USERNAME=$(grep "^DASHBOARD_USERNAME=" .env | cut -d'=' -f2 || true)
-  DASHBOARD_PASSWORD=$(grep "^DASHBOARD_PASSWORD=" .env | cut -d'=' -f2 || true)
-  ANON_KEY=$(grep "^ANON_KEY=" .env | cut -d'=' -f2 || true)
-  SERVICE_ROLE_KEY=$(grep "^SERVICE_ROLE_KEY=" .env | cut -d'=' -f2 || true)
-fi
+  if [ -f "$SUPABASE_DIR/.env" ]; then
+    echo "Carregando credenciais do Supabase existente em $SUPABASE_DIR..."
+    POSTGRES_PASSWORD=$(grep "^POSTGRES_PASSWORD=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    ANON_KEY=$(grep "^ANON_KEY=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    SERVICE_ROLE_KEY=$(grep "^SERVICE_ROLE_KEY=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    DASHBOARD_USERNAME=$(grep "^DASHBOARD_USERNAME=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "admin")
+    DASHBOARD_PASSWORD=$(grep "^DASHBOARD_PASSWORD=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || echo "********")
 
-# Gerar valores caso ainda não existam
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}
-JWT_SECRET=${JWT_SECRET:-$(openssl rand -hex 32)}
-SECRET_KEY_BASE=${SECRET_KEY_BASE:-$(openssl rand -hex 32)}
-VAULT_ENC_KEY=${VAULT_ENC_KEY:-$(openssl rand -hex 16)}
-DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-admin}
-DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-$(openssl rand -base64 12)}
+    # Garantir exposicao de schemas no PostgREST
+    CURRENT_SCHEMAS=$(grep "^PGRST_DB_SCHEMAS=" "$SUPABASE_DIR/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    [ -z "$CURRENT_SCHEMAS" ] && CURRENT_SCHEMAS="public,storage,graphql_public"
+    for schema_to_add in "uaiflow" "quiz"; do
+      if [[ ! "$CURRENT_SCHEMAS" =~ "$schema_to_add" ]]; then
+        CURRENT_SCHEMAS="${CURRENT_SCHEMAS},${schema_to_add}"
+      fi
+    done
+    set_env "PGRST_DB_SCHEMAS" "\"$CURRENT_SCHEMAS\"" "$SUPABASE_DIR/.env"
+    echo "PGRST_DB_SCHEMAS atualizado para: $CURRENT_SCHEMAS"
 
-# Gerar chaves JWT se necessário
-if [ -z "$ANON_KEY" ] || [ -z "$SERVICE_ROLE_KEY" ]; then
+    cd "$SUPABASE_DIR"
+    docker compose up -d --force-recreate $(docker compose config --services 2>/dev/null | grep -E 'rest|meta') 2>/dev/null || docker compose up -d
+  fi
+else
+  SUPABASE_DIR="/opt/supabase"
+  echo "Instalando nova instância do Supabase em $SUPABASE_DIR..."
+  mkdir -p "$SUPABASE_DIR"
+
+  if [ ! -f "$SUPABASE_DIR/.env.example" ] || [ ! -f "$SUPABASE_DIR/docker-compose.yml" ]; then
+    TEMP_REPO="/tmp/supabase-repo-$$"
+    git clone --depth 1 https://github.com/supabase/supabase.git "$TEMP_REPO"
+    cp -rf "$TEMP_REPO"/docker/. "$SUPABASE_DIR"/
+    rm -rf "$TEMP_REPO"
+  fi
+
+  if [ ! -f "$SUPABASE_DIR/.env.example" ]; then
+    curl -fsSL https://raw.githubusercontent.com/supabase/supabase/master/docker/.env.example -o "$SUPABASE_DIR/.env.example"
+  fi
+
+  cd "$SUPABASE_DIR"
+  [ ! -f .env ] && cp .env.example .env
+
+  POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}
+  JWT_SECRET=${JWT_SECRET:-$(openssl rand -hex 32)}
+  SECRET_KEY_BASE=${SECRET_KEY_BASE:-$(openssl rand -hex 32)}
+  VAULT_ENC_KEY=${VAULT_ENC_KEY:-$(openssl rand -hex 16)}
+  DASHBOARD_USERNAME=${DASHBOARD_USERNAME:-admin}
+  DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-$(openssl rand -base64 12)}
+
   KEYS_JSON=$(node -e '
   const crypto = require("crypto");
   const secret = process.argv[1];
@@ -117,7 +147,7 @@ if [ -z "$ANON_KEY" ] || [ -z "$SERVICE_ROLE_KEY" ]; then
     return `${h}.${b}.${s}`;
   };
   const now = Math.floor(Date.now() / 1000);
-  const exp = now + 15 * 365 * 24 * 3600; // 15 anos
+  const exp = now + 15 * 365 * 24 * 3600;
   const anon = sign({ role: "anon", iss: "supabase", iat: now, exp });
   const service = sign({ role: "service_role", iss: "supabase", iat: now, exp });
   console.log(JSON.stringify({ anon, service }));
@@ -125,98 +155,67 @@ if [ -z "$ANON_KEY" ] || [ -z "$SERVICE_ROLE_KEY" ]; then
 
   ANON_KEY=$(echo "$KEYS_JSON" | jq -r .anon)
   SERVICE_ROLE_KEY=$(echo "$KEYS_JSON" | jq -r .service)
-fi
 
-set_env() {
-  local key="$1"
-  local val="$2"
-  local file="${3:-.env}"
-  if grep -q "^${key}=" "$file"; then
-    sed -i "s|^${key}=.*|${key}=${val}|g" "$file"
-  else
-    echo "${key}=${val}" >> "$file"
-  fi
-}
+  set_env "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
+  set_env "JWT_SECRET" "$JWT_SECRET"
+  set_env "ANON_KEY" "$ANON_KEY"
+  set_env "SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY"
+  set_env "DASHBOARD_USERNAME" "$DASHBOARD_USERNAME"
+  set_env "DASHBOARD_PASSWORD" "$DASHBOARD_PASSWORD"
+  set_env "SECRET_KEY_BASE" "$SECRET_KEY_BASE"
+  set_env "VAULT_ENC_KEY" "$VAULT_ENC_KEY"
+  set_env "API_EXTERNAL_URL" "https://$SUPABASE_DOMAIN"
+  set_env "SITE_URL" "https://$APP_DOMAIN"
+  set_env "ADDITIONAL_REDIRECT_URLS" "https://$APP_DOMAIN/auth/callback,https://$APP_DOMAIN"
+  set_env "ENABLE_EMAIL_AUTOCONFIRM" "true"
+  set_env "API_GW_HTTP_PORT" "8800"
+  set_env "KONG_HTTP_PORT" "8800"
+  set_env "KONG_HTTPS_PORT" "8444"
+  set_env "POSTGRES_PORT" "54322"
+  set_env "PGRST_DB_SCHEMAS" "\"public,storage,graphql_public,uaiflow,quiz\""
 
-# Criar ou atualizar o .env do Supabase
-[ ! -f .env ] && cp .env.example .env
+  echo "Iniciando containers do Supabase..."
+  docker compose up -d
 
-set_env "POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
-set_env "JWT_SECRET" "$JWT_SECRET"
-set_env "ANON_KEY" "$ANON_KEY"
-set_env "SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY"
-set_env "DASHBOARD_USERNAME" "$DASHBOARD_USERNAME"
-set_env "DASHBOARD_PASSWORD" "$DASHBOARD_PASSWORD"
-set_env "SECRET_KEY_BASE" "$SECRET_KEY_BASE"
-set_env "VAULT_ENC_KEY" "$VAULT_ENC_KEY"
+  DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'supabase.*db|supabase-postgres|postgres:17' | head -n1)
+  [ -z "$DB_CONTAINER" ] && DB_CONTAINER="supabase-db"
 
-set_env "API_EXTERNAL_URL" "https://$SUPABASE_DOMAIN"
-set_env "SITE_URL" "https://$APP_DOMAIN"
-set_env "ADDITIONAL_REDIRECT_URLS" "https://$APP_DOMAIN/auth/callback,https://$APP_DOMAIN"
-set_env "ENABLE_EMAIL_AUTOCONFIRM" "true"
+  echo "Aguardando PostgreSQL inicializar..."
+  for i in {1..30}; do
+    if docker exec "$DB_CONTAINER" pg_isready -U postgres -d postgres &>/dev/null; then
+      echo -e "${GREEN}PostgreSQL está pronto!${NC}"
+      break
+    fi
+    sleep 2
+  done
 
-# Portas customizadas para evitar conflito com Coolify e outros containers
-set_env "API_GW_HTTP_PORT" "8800"
-set_env "KONG_HTTP_PORT" "8800"
-set_env "KONG_HTTPS_PORT" "8444"
-set_env "POSTGRES_PORT" "54322"
-
-# Garantir que os schemas necessarios (public, graphql_public, uaiflow, quiz) estejam expostos no PostgREST
-CURRENT_SCHEMAS=$(grep "^PGRST_DB_SCHEMAS=" "$SUPABASE_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
-if [ -z "$CURRENT_SCHEMAS" ]; then
-  CURRENT_SCHEMAS="public,graphql_public,quiz"
-fi
-for schema_to_add in "uaiflow" "quiz"; do
-  if ! echo "$CURRENT_SCHEMAS" | grep -qw "$schema_to_add"; then
-    CURRENT_SCHEMAS="${CURRENT_SCHEMAS},${schema_to_add}"
-  fi
-done
-set_env "PGRST_DB_SCHEMAS" "$CURRENT_SCHEMAS"
-
-echo "Parando eventuais containers anteriores do Supabase..."
-docker compose down 2>/dev/null || true
-
-echo "Iniciando containers do Supabase..."
-docker compose up -d
-
-echo "Aguardando PostgreSQL do Supabase inicializar..."
-for i in {1..30}; do
-  if docker exec supabase-db pg_isready -U postgres -d postgres &>/dev/null; then
-    echo -e "${GREEN}PostgreSQL está pronto!${NC}"
-    break
-  fi
-  sleep 2
-done
-
-# Sincronizar senhas de todos os usuários internos com a senha atual do .env
-docker exec -i supabase-db psql -U postgres -d postgres <<EOF 2>/dev/null || true
+  docker exec -i "$DB_CONTAINER" psql -U postgres -d postgres <<EOF 2>/dev/null || true
 ALTER USER postgres WITH PASSWORD '$POSTGRES_PASSWORD';
 ALTER USER supabase_admin WITH PASSWORD '$POSTGRES_PASSWORD';
 ALTER USER supabase_auth_admin WITH PASSWORD '$POSTGRES_PASSWORD';
 ALTER USER authenticator WITH PASSWORD '$POSTGRES_PASSWORD';
 ALTER USER supabase_storage_admin WITH PASSWORD '$POSTGRES_PASSWORD';
 EOF
-
-docker compose restart auth rest storage 2>/dev/null || true
+  docker compose restart auth rest storage 2>/dev/null || true
+fi
 
 # 5. Executar as Migrations do Projeto
-echo -e "${CYAN}[3/4] Aplicando migrations do banco de dados...${NC}"
+echo -e "${CYAN}[3/4] Aplicando migrations do banco de dados no schema quiz...${NC}"
+DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'supabase.*db|supabase-postgres|postgres:17' | head -n1)
+[ -z "$DB_CONTAINER" ] && DB_CONTAINER="supabase-db"
+
 if [ -d "$PROJECT_DIR/supabase/migrations" ]; then
   for sql_file in $(ls -1 "$PROJECT_DIR"/supabase/migrations/*.sql 2>/dev/null | sort); do
     echo "  -> Executando $(basename "$sql_file")..."
-    docker exec -i supabase-db psql -U postgres -d postgres < "$sql_file" > /dev/null 2>&1 || true
+    docker exec -i "$DB_CONTAINER" psql -U postgres -d postgres < "$sql_file" > /dev/null 2>&1 || true
   done
+  docker exec -i "$DB_CONTAINER" psql -U postgres -d postgres -c "SELECT pg_notify('pgrst', 'reload schema');" > /dev/null 2>&1 || true
   echo -e "${GREEN}Todas as migrations foram aplicadas!${NC}"
 fi
 
 # 6. Configurar e Subir o Container do App Next.js
 echo -e "${CYAN}[4/4] Construindo e iniciando a aplicação Next.js...${NC}"
 cd "$PROJECT_DIR"
-
-export NEXT_PUBLIC_SUPABASE_URL="https://$SUPABASE_DOMAIN"
-export NEXT_PUBLIC_SUPABASE_ANON_KEY="$ANON_KEY"
-export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-export NEXT_PUBLIC_APP_URL="https://$APP_DOMAIN"
 
 cat <<EOF > .env
 NEXT_PUBLIC_SUPABASE_URL=https://$SUPABASE_DOMAIN
@@ -236,6 +235,14 @@ docker compose build \
   --build-arg SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
 
 docker compose up -d
+
+# Conectar na rede do Supabase se existir para comunicacao direta
+if [ -n "$DB_CONTAINER" ]; then
+  SUPABASE_NET=$(docker inspect "$DB_CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | head -n1)
+  if [ -n "$SUPABASE_NET" ] && [ "$SUPABASE_NET" != "bridge" ]; then
+    docker network connect "$SUPABASE_NET" quiz-app 2>/dev/null || true
+  fi
+fi
 
 # 7. Salvar credenciais geradas e instruções
 CREDS_FILE="/root/quiz_credentials.txt"
