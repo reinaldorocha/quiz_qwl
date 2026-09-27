@@ -132,6 +132,7 @@ export async function ensureDefaultWorkspaceForUser(
   fullName?: string | null,
 ): Promise<UserWorkspace[]> {
   try {
+    const supabase = await createClient();
     const supabaseWithRpc = supabase as unknown as {
       rpc: (
         fn: string,
