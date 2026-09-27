@@ -132,8 +132,13 @@ export async function ensureDefaultWorkspaceForUser(
   fullName?: string | null,
 ): Promise<UserWorkspace[]> {
   try {
-    const supabase = await createClient();
-    const { error: rpcError } = await (supabase.rpc as any)(
+    const supabaseWithRpc = supabase as unknown as {
+      rpc: (
+        fn: string,
+        args: Record<string, unknown>,
+      ) => Promise<{ data: unknown; error: { message: string } | null }>;
+    };
+    const { error: rpcError } = await supabaseWithRpc.rpc(
       "create_default_workspace_if_missing",
       {
         p_user_id: userId,

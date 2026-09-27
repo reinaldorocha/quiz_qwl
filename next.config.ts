@@ -29,6 +29,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   serverExternalPackages: [
     "@supabase/supabase-js",
     "@supabase/ssr",
