@@ -9,6 +9,7 @@ import { getCreateQuizAccess } from "@/domains/billing/services/subscription.ser
 import { listQuizFoldersByWorkspaceId } from "@/domains/quiz/services/quiz-folder.service";
 import { listQuizzesByWorkspaceId } from "@/domains/quiz/services/quiz.service";
 import {
+  ensureDefaultWorkspaceForUser,
   listWorkspacesForUser,
   resolveActiveWorkspaceForUser,
 } from "@/domains/workspace/services/workspace.service";
@@ -35,7 +36,14 @@ export default async function DashboardPage({
     redirect(ROUTES.login);
   }
 
-  const workspaces = await listWorkspacesForUser(user.id);
+  let workspaces = await listWorkspacesForUser(user.id);
+  if (workspaces.length === 0) {
+    workspaces = await ensureDefaultWorkspaceForUser(
+      user.id,
+      user.email ?? "",
+      user.user_metadata?.full_name,
+    );
+  }
   if (workspaces.length === 0) {
     return (
       <div className="mx-auto max-w-lg space-y-3 text-center">

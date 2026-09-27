@@ -10,6 +10,7 @@ import type {
   WorkspaceRole,
 } from "@/domains/workspace/types/workspace.types";
 import { createClient } from "@/services/supabase/server";
+import { createAdminClient } from "@/services/supabase/admin";
 
 export async function getDefaultWorkspaceForUser(
   userId: string,
@@ -63,7 +64,12 @@ export async function listWorkspacesForUser(
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
 
-  if (error || !memberships?.length) {
+  if (error) {
+    console.error("[listWorkspacesForUser] error fetching memberships:", error.message);
+    return [];
+  }
+
+  if (!memberships?.length) {
     return [];
   }
 
@@ -73,7 +79,12 @@ export async function listWorkspacesForUser(
     .select("*")
     .in("id", workspaceIds);
 
-  if (workspacesError || !workspaces) {
+  if (workspacesError) {
+    console.error("[listWorkspacesForUser] error fetching workspaces:", workspacesError.message);
+    return [];
+  }
+
+  if (!workspaces || workspaces.length === 0) {
     return [];
   }
 
@@ -85,20 +96,27 @@ export async function listWorkspacesForUser(
     .select("id, email, full_name")
     .in("id", ownerIds);
 
-  if (ownersError || !owners) {
-    return [];
+  if (ownersError) {
+    console.warn(
+      "[listWorkspacesForUser] Warning fetching workspace owners:",
+      ownersError.message,
+    );
   }
 
+  const ownerList = owners ?? [];
   const ownerById = new Map<string, WorkspaceOwnerSummary>(
-    owners.map((owner) => [owner.id, owner]),
+    ownerList.map((owner) => [owner.id, owner]),
   );
 
   return memberships
     .map((membership) => {
       const workspace = workspaceById.get(membership.workspace_id);
       if (!workspace) return null;
-      const owner = ownerById.get(workspace.owner_id);
-      if (!owner) return null;
+      const owner = ownerById.get(workspace.owner_id) ?? {
+        id: workspace.owner_id,
+        email: "",
+        full_name: null,
+      };
       return {
         ...workspace,
         role: membership.role as WorkspaceRole,
@@ -106,6 +124,107 @@ export async function listWorkspacesForUser(
       };
     })
     .filter((item): item is UserWorkspace => item !== null);
+}
+
+export async function ensureDefaultWorkspaceForUser(
+  userId: string,
+  email: string,
+  fullName?: string | null,
+): Promise<UserWorkspace[]> {
+  try {
+    const admin = createAdminClient();
+
+    // 1. Garantir que o perfil exista
+    await admin.from("profiles").upsert(
+      {
+        id: userId,
+        email: email || "",
+        full_name: fullName || null,
+      },
+      { onConflict: "id" },
+    );
+
+    // 2. Verificar se o usuario ja tem workspaces
+    const existing = await listWorkspacesForUser(userId);
+    if (existing.length > 0) {
+      return existing;
+    }
+
+    // 3. Criar workspace padrao
+    const baseName = fullName?.trim() || "Meu workspace";
+    const slug = `workspace-${userId.replace(/-/g, "").slice(0, 8)}`;
+
+    const { data: createdWs, error: wsError } = await admin
+      .from("workspaces")
+      .upsert(
+        {
+          name: baseName,
+          slug,
+          owner_id: userId,
+        },
+        { onConflict: "slug" },
+      )
+      .select()
+      .maybeSingle();
+
+    if (wsError) {
+      console.warn("[ensureDefaultWorkspaceForUser] Workspace upsert:", wsError.message);
+    }
+
+    let workspaceId = createdWs?.id;
+    if (!workspaceId) {
+      const { data: foundWs } = await admin
+        .from("workspaces")
+        .select("id")
+        .eq("slug", slug)
+        .maybeSingle();
+      workspaceId = foundWs?.id;
+    }
+
+    if (workspaceId) {
+      await admin.from("workspace_members").upsert(
+        {
+          workspace_id: workspaceId,
+          user_id: userId,
+          role: "owner",
+        },
+        { onConflict: "workspace_id,user_id" },
+      );
+
+      // Atribuir plano padrao se configurado em platform_settings
+      const { data: settings } = await admin
+        .from("platform_settings")
+        .select("default_plan_id, trial_days")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (
+        settings?.default_plan_id &&
+        settings.trial_days &&
+        settings.trial_days > 0
+      ) {
+        const now = new Date();
+        const periodEnd = new Date(
+          now.getTime() + settings.trial_days * 24 * 60 * 60 * 1000,
+        );
+        await admin.from("workspace_subscriptions").upsert(
+          {
+            workspace_id: workspaceId,
+            plan_id: settings.default_plan_id,
+            status: "active",
+            current_period_start: now.toISOString(),
+            current_period_end: periodEnd.toISOString(),
+          },
+          { onConflict: "workspace_id" },
+        );
+      }
+    }
+
+    return await listWorkspacesForUser(userId);
+  } catch (err) {
+    console.error("[ensureDefaultWorkspaceForUser] Erro ao provisionar workspace:", err);
+    return [];
+  }
 }
 
 export async function getUserRoleInWorkspace(
